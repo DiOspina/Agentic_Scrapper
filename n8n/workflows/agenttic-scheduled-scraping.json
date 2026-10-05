@@ -1,0 +1,261 @@
+{
+  "name": "Agenttic Scheduled Web Scraping",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 6,
+              "unit": "hours"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cron-trigger",
+      "name": "Cron Trigger (Every 6 Hours)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/v1/urls/to-scrape",
+        "method": "GET",
+        "options": {},
+        "jsonParameters": true
+      },
+      "id": "get-urls",
+      "name": "Get URLs to Scrape",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Check if we have URLs to scrape\nconst urls = $json.urls || [];\n\nif (!urls.length) {\n  return [{ json: { message: 'No URLs to scrape', urls: [], skip: true } }];\n}\n\n// Split into batches of 5\nconst batchSize = 5;\nconst batches = [];\nfor (let i = 0; i < urls.length; i += batchSize) {\n  batches.push(urls.slice(i, i + batchSize));\n}\n\nreturn batches.map(batch => ({ json: { urls: batch } }));"
+      },
+      "id": "split-urls",
+      "name": "Split URLs into Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [750, 300],
+      "executeOnce": false
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/v1/agents/scrape",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify({ urls: $json.urls, config: { max_pages: 10, max_depth: 2 } }) }}"
+      },
+      "id": "scrape-batch",
+      "name": "Scrape Batch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Process scraped results and store as documents\nconst scrapedData = $json.data || {};\nconst pages = scrapedData.pages || [];\n\nif (!pages.length) {\n  return [{ json: { message: 'No pages scraped', stored: 0 } }];\n}\n\n// Convert to document format\nconst documents = pages.map((page, index) => ({\n  document_id: `scheduled_${Date.now()}_${index}`,\n  filename: `scraped_${new URL(page.url).hostname}_${index}.txt`,\n  original_filename: `scraped_${new URL(page.url).hostname}_${index}.txt`,\n  file_path: `/uploads/scheduled_${Date.now()}_${index}.txt`,\n  file_size: page.content?.length || 0,\n  mime_type: 'text/plain',\n  document_type: 'txt',\n  content: page.content || '',\n  metadata: {\n    source: 'scheduled_scraper',\n    url: page.url,\n    title: page.title,\n    scraped_at: page.timestamp,\n    ...page.metadata\n  }\n})).filter(d => d.content.length > 0);\n\nreturn [{ json: { documents, count: documents.length } }];"
+      },
+      "id": "process-results",
+      "name": "Process Results",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/v1/documents/batch-process",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify($json.documents.map(d => d.document_id)) }}"
+      },
+      "id": "store-documents",
+      "name": "Store Documents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1500, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Trigger analysis on new documents\nconst documentIds = $json.documents.map(d => d.document_id);\n\nreturn [{ json: {\n  document_ids: documentIds,\n  queries: [\n    'What are the key metrics and trends in this data?',\n    'Are there any anomalies or unusual patterns?',\n    'Provide a summary of the main findings'\n  ],\n  analysis_types: ['summarization', 'key_metrics', 'pattern_detection', 'anomaly_detection']\n} }];"
+      },
+      "id": "trigger-analysis",
+      "name": "Trigger Analysis",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1500, 400]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/v1/agents/analyze",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify({ document_ids: $json.document_ids, queries: $json.queries, analysis_types: $json.analysis_types }) }}"
+      },
+      "id": "run-analysis",
+      "name": "Run Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1750, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Generate report from analysis\nconst analysisResults = $json.data?.analyses || [];\n\nreturn [{ json: {\n  analysis_results: analysisResults,\n  report_config: {\n    report_type: 'executive_summary',\n    formats: ['json', 'markdown']\n  }\n} }];"
+      },
+      "id": "prepare-report",
+      "name": "Prepare Report",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/v1/agents/synthesize",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify({ analysis_results: $json.analysis_results, report_config: $json.report_config }) }}"
+      },
+      "id": "generate-scheduled-report",
+      "name": "Generate Scheduled Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [2250, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $workflow.getParameter('telegramChatId') }}",
+        "text": "📅 *Scheduled Scraping Complete*\n\n📊 *Report ID:* `{{$json.data.report_id}}`\n📄 *Documents Processed:* {{$json.data.document_count || 0}}\n📈 *Analyses Run:* {{$json.data.analysis_count || 0}}\n⏱ *Completed:* {{$json.data.completed_at || new Date().toISOString()}}",
+        "parseMode": "Markdown",
+        "options": {}
+      },
+      "id": "telegram-scheduled",
+      "name": "Telegram Scheduled Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2500, 300],
+      "credentials": {
+        "telegramApi": "telegram-credentials"
+      }
+    }
+  ],
+  "connections": {
+    "Cron Trigger (Every 6 Hours)": {
+      "main": [
+        [
+          {
+            "node": "Get URLs to Scrape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get URLs to Scrape": {
+      "main": [
+        [
+          {
+            "node": "Split URLs into Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split URLs into Batches": {
+      "main": [
+        [
+          {
+            "node": "Scrape Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Batch": {
+      "main": [
+        [
+          {
+            "node": "Process Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Results": {
+      "main": [
+        [
+          {
+            "node": "Store Documents",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Trigger Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Analysis": {
+      "main": [
+        [
+          {
+            "node": "Run Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Analysis": {
+      "main": [
+        [
+          {
+            "node": "Prepare Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Report": {
+      "main": [
+        [
+          {
+            "node": "Generate Scheduled Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Scheduled Report": {
+      "main": [
+        [
+          {
+            "node": "Telegram Scheduled Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "agenttic-scheduled-scraping"
+}

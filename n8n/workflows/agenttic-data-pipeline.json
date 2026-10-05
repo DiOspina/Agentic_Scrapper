@@ -1,0 +1,350 @@
+{
+  "name": "Agenttic Data Processing Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agenttic/data-pipeline",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "agenttic-data-pipeline"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Extract URLs from webhook payload\nconst urls = $json.urls || [];\nconst config = $json.config || {};\n\n// Validate URLs\nif (!urls.length) {\n  throw new Error('No URLs provided');\n}\n\nreturn [{ json: { urls, config, timestamp: new Date().toISOString() } }];"
+      },
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/v1/agents/scrape",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify({ urls: $json.urls, config: $json.config }) }}"
+      },
+      "id": "scrape-data",
+      "name": "Scrape Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [750, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Process scraped data and prepare for analysis\nconst scrapedData = $json.data || {};\nconst pages = scrapedData.pages || [];\n\n// Convert pages to documents format\nconst documents = pages.map((page, index) => ({\n  document_id: `scraped_${index}_${Date.now()}`,\n  content: page.content || '',\n  metadata: {\n    source: 'scraper',\n    url: page.url,\n    title: page.title,\n    scraped_at: page.timestamp,\n    ...page.metadata\n  }\n})).filter(d => d.content.length > 0);\n\nconst queries = $json.queries || [];\n\nreturn [{ json: { documents, queries, analysis_types: ['summarization', 'key_metrics', 'pattern_detection', 'anomaly_detection'], timestamp: new Date().toISOString() } }];"
+      },
+      "id": "prepare-analysis",
+      "name": "Prepare Analysis",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/v1/agents/analyze",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify({ documents: $json.documents, queries: $json.queries, analysis_types: $json.analysis_types }) }}"
+      },
+      "id": "analyze-data",
+      "name": "Analyze Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Prepare data for report generation\nconst analysisResults = $json.data?.analyses || [];\nconst queryResults = $json.data?.query_results || [];\nconst scrapedData = $json.scraped_data || {};\nconst metrics = $json.metrics || {};\n\nreturn [{ json: {\n  analysis_results: analysisResults,\n  scraped_data: scrapedData,\n  query_results: queryResults,\n  metrics: metrics,\n  report_config: {\n    report_type: 'executive_summary',\n    formats: ['json', 'markdown'],\n    include_charts: true\n  },\n  timestamp: new Date().toISOString()\n} }];"
+      },
+      "id": "prepare-synthesis",
+      "name": "Prepare Synthesis",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1500, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/v1/agents/synthesize",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify({ analysis_results: $json.analysis_results, scraped_data: $json.scraped_data, query_results: $json.query_results, metrics: $json.metrics, report_config: $json.report_config }) }}"
+      },
+      "id": "generate-report",
+      "name": "Generate Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1750, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Format final response\nconst report = $json.data || {};\n\nreturn [{ json: {\n  success: true,\n  report_id: report.report_id,\n  report_type: report.report_type,\  formats: report.formats,\n  output_paths: report.output_paths,\n  metadata: report.metadata,\n  completed_at: new Date().toISOString()\n} }];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2000, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id || $workflow.getParameter('telegramChatId') }}",
+        "text": "✅ *Agenttic Pipeline Complete*\n\n📊 *Report ID:* `{{$json.report_id}}`\n📄 *Type:* {{$json.report_type}}\n📁 *Formats:* {{$json.formats.join(', ')}}\n⏱ *Completed:* {{$json.completed_at}}\n\n🔗 *View Report:* http://localhost:3000/reports/{{$json.report_id}}",
+        "parseMode": "Markdown",
+        "options": {}
+      },
+      "id": "telegram-notify",
+      "name": "Telegram Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2250, 100],
+      "credentials": {
+        "telegramApi": "telegram-credentials"
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $workflow.getParameter('emailFrom') }}",
+        "toEmail": "={{ $json.email || $workflow.getParameter('emailTo') }}",
+        "subject": "Agenttic Analysis Complete - {{$json.report_id}}",
+        "text": "Your Agenttic analysis pipeline has completed successfully.\n\nReport ID: {{$json.report_id}}\nType: {{$json.report_type}}\nFormats: {{$json.formats.join(', ')}}\nCompleted: {{$json.completed_at}}\n\nView the report at: http://localhost:3000/reports/{{$json.report_id}}",
+        "options": {}
+      },
+      "id": "email-notify",
+      "name": "Email Notification",
+      "type": "n8n-nodes-base.sendEmail",
+      "typeVersion": 1,
+      "position": [2250, 300],
+      "credentials": {
+        "smtp": "smtp-credentials"
+      }
+    },
+    {
+      "parameters": {
+        "webhookUrl": "={{ $workflow.getParameter('slackWebhookUrl') }}",
+        "text": "✅ Agenttic Pipeline Complete",
+        "attachments": [
+          {
+            "color": "good",
+            "fields": [
+              {
+                "title": "Report ID",
+                "value": "{{$json.report_id}}",
+                "short": true
+              },
+              {
+                "title": "Type",
+                "value": "{{$json.report_type}}",
+                "short": true
+              },
+              {
+                "title": "Formats",
+                "value": "{{$json.formats.join(', ')}}",
+                "short": true
+              },
+              {
+                "title": "Completed",
+                "value": "{{$json.completed_at}}",
+                "short": true
+              }
+            ],
+            "actions": [
+              {
+                "type": "button",
+                "text": "View Report",
+                "url": "http://localhost:3000/reports/{{$json.report_id}}",
+                "style": "primary"
+              }
+            ]
+          }
+        ],
+        "options": {}
+      },
+      "id": "slack-notify",
+      "name": "Slack Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [2250, 500],
+      "credentials": {
+        "slackApi": "slack-credentials"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Error handling\nconst error = $json.error || 'Unknown error';\nconst executionId = $json.execution_id || 'unknown';\n\nreturn [{ json: {\n  success: false,\n  error: error,\n  execution_id: executionId,\n  failed_at: new Date().toISOString()\n} }];"
+      },
+      "id": "error-handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1000, 500]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $workflow.getParameter('telegramChatId') }}",
+        "text": "❌ *Agenttic Pipeline Failed*\n\n🆔 *Execution ID:* `{{$json.execution_id}}`\n⚠️ *Error:* {{$json.error}}\n⏱ *Failed:* {{$json.failed_at}}",
+        "parseMode": "Markdown",
+        "options": {}
+      },
+      "id": "telegram-error",
+      "name": "Telegram Error Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1250, 500],
+      "credentials": {
+        "telegramApi": "telegram-credentials"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Scrape Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Analysis": {
+      "main": [
+        [
+          {
+            "node": "Analyze Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Synthesis": {
+      "main": [
+        [
+          {
+            "node": "Generate Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Report": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Telegram Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Telegram Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "agenttic-data-pipeline",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

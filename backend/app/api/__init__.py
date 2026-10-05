@@ -1,0 +1,6 @@
+"""
+API package for Agenttic AI Orchestration System.
+"""
+from app.api.v1 import router as api_router
+
+__all__ = ["api_router"]
